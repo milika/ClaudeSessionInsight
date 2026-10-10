@@ -20,14 +20,29 @@ you want to know about a session in sight.
 Everything the mod does around the session is guarded: bookkeeping failures are swallowed
 and never block a prompt, a tool call or the exit.
 
-## Run it
+## Install
+
+Needs Claude Code 2.1.275 or later. In a terminal Claude Code session, at the prompt:
 
 ```
-claude --plugin-dir /path/to/ClaudeSessionInsight
+/plugin install session-insights --marketplace milika/ClaudeSessionInsight
 ```
 
-To load it in every session the desktop app starts, set `CLAUDE_CODE_PLUGIN_DIRS` to the
-folder in the `env` block of `~/.claude/settings.json`.
+Answer `y` to add the marketplace, then pick a scope (user scope loads it in every
+session, including the desktop app's local sessions). The mod is active at once, with no
+restart.
+
+## Run it from a folder instead
+
+For trying changes without installing:
+
+```
+git clone https://github.com/milika/ClaudeSessionInsight
+claude --plugin-dir ./ClaudeSessionInsight
+```
+
+To load a folder in every session the desktop app starts, set `CLAUDE_CODE_PLUGIN_DIRS`
+to its absolute path in the `env` block of `~/.claude/settings.json`.
 
 ## Notes
 
@@ -45,3 +60,7 @@ folder in the `env` block of `~/.claude/settings.json`.
 claude plugin validate .
 claude plugin test .
 ```
+
+## License
+
+[MIT](LICENSE)

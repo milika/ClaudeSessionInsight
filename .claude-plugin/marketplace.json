@@ -1,0 +1,12 @@
+{
+  "name": "claude-session-insight",
+  "description": "Session insights for Claude Code: weekly limit, auto-compact and background-task marker.",
+  "owner": { "name": "milika" },
+  "plugins": [
+    {
+      "name": "session-insights",
+      "source": "./",
+      "description": "A weekly-limit band and insights pane, auto-compact at 75% context, and a title marker while background tasks run."
+    }
+  ]
+}
