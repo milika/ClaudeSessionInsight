@@ -190,7 +190,7 @@ export const register: Register = on => {
       const stored = sanitizeWeeks(await $.store.get('weeks'))
       await update($, weeks, () => stored)
     })
-    await safe(() => $.ui.open({ id: PANE, title: 'Session insights' }))
+    // the panel is never opened unasked: the band's button or /insight-panel shows it
     await safe(() => syncPanel($))
     await safe(() => syncTitle($)) // drops a marker left behind by a previous load
     await safe(async () => {
