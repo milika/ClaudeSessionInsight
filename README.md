@@ -8,7 +8,8 @@ you want to know about a session in sight.
 - **Weekly limit band** above the prompt: a progress bar for the seven-day limit with a
   tick where an even pace would be, your average %/day this week, and the projected
   total at the reset. Green, amber or red by pace.
-- **Insights pane** (`/insights`, also opened at session start): the weekly bar, a
+- **Insights panel** (toggle it with `/insight-panel` or the show/hide button in the band;
+  also opened at session start): the weekly bar, a
   per-day chart of how much of the limit each day spent against an even share, prompt
   and tool-call counts, durations by tool, and the recent calls.
 - **Auto-compact at 75% context**, with an on/off toggle in the band. It waits at least

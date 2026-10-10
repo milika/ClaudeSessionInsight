@@ -27,6 +27,10 @@ const weeks = atom({ plugin: 'session-insights', key: 'weeks' } as const, [])
 const contextPct = atom({ plugin: 'session-insights', key: 'contextPct' } as const, null)
 const isAutoCompact = atom({ plugin: 'session-insights', key: 'isAutoCompact' } as const, true)
 const isCompacting = atom({ plugin: 'session-insights', key: 'isCompacting' } as const, false)
+const isPanelOpen = atom({ plugin: 'session-insights', key: 'isPanelOpen' } as const, false)
+
+/** Not `/insights`: that one is a built-in skill's name. */
+const COMMAND = 'insight-panel'
 
 const fmt = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`)
 
@@ -49,6 +53,40 @@ async function safe(fn: () => unknown): Promise<void> {
     await fn()
   } catch {
     // the mod only watches; a failed watch is not worth the session's turn
+  }
+}
+
+/** Whether the insights panel is open and drawn, from the engine's own record. */
+async function panelIsShown($: EngineInterface): Promise<boolean> {
+  try {
+    return (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced)
+  } catch {
+    return false
+  }
+}
+
+/** Copies the engine's record of the panel into the band's state; returns it. */
+async function syncPanel($: EngineInterface): Promise<boolean> {
+  const isShown = await panelIsShown($)
+  await safe(() => update($, isPanelOpen, () => isShown))
+
+  return isShown
+}
+
+/** Hides the panel when it is shown and shows it when it is not; says which happened. */
+async function togglePanel($: EngineInterface): Promise<'shown' | 'hidden' | 'failed'> {
+  try {
+    if (await panelIsShown($)) {
+      await $.ui.close({ id: PANE })
+      await syncPanel($)
+
+      return 'hidden'
+    }
+    await $.ui.open({ id: PANE, title: 'Session insights' })
+
+    return (await syncPanel($)) ? 'shown' : 'failed'
+  } catch {
+    return 'failed'
   }
 }
 
@@ -124,7 +162,7 @@ async function applyTitle($: EngineInterface) {
   }
 }
 
-/** Records the seven-day window's percent and mirrors it into the pane's and band's state. */
+/** Records the seven-day window's percent and mirrors it into the panel's and band's state. */
 async function track($: EngineInterface, limits: Limit[]) {
   const limit = limits.find(l => l.kind === 'seven_day')
   if (!limit?.resetsAt || !Number.isFinite(limit.percentUsed)) return
@@ -143,8 +181,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await safe(() =>
       $.command.register({
-        name: 'insights',
-        description: 'Show session insights: tool calls, durations, prompts, weekly limit',
+        name: COMMAND,
+        description: 'Show or hide the session insights panel: weekly limit, tool calls, durations',
       }),
     )
     await safe(() => $.ui.status(''))
@@ -153,6 +191,7 @@ export const register: Register = on => {
       await update($, weeks, () => stored)
     })
     await safe(() => $.ui.open({ id: PANE, title: 'Session insights' }))
+    await safe(() => syncPanel($))
     await safe(() => syncTitle($)) // drops a marker left behind by a previous load
     await safe(async () => {
       // no reading yet is fine; session.measure fills it in after the first response
@@ -232,11 +271,11 @@ export const register: Register = on => {
 
     const auto = await read($, isAutoCompact).catch(() => true)
     const busy = await read($, isCompacting).catch(() => false)
+    const isOpen = await read($, isPanelOpen).catch(() => false)
     const all = sanitizeWeeks(await read($, weeks).catch(() => []))
     const now = Date.now()
     const current = all.filter(w => w.endsAt > now).sort((a, b) => a.endsAt - b.endsAt)[0]
     const report = current ? analyze(current, now) : undefined
-    if (!report && !busy) return next(e)
 
     const els = $.ui.resolve(e)
     const { Box, Button, Text } = els
@@ -275,24 +314,44 @@ export const register: Register = on => {
         <Text dimColor={!isHot} bold={isHot}>
           {parts.join(' · ')}{' '}
         </Text>
+        <Box flexGrow={1} />
         <Button
           key="auto"
           label={auto ? `auto-compact ${COMPACT_AT}%: on` : `auto-compact ${COMPACT_AT}%: off`}
           dimColor
           onPress={() => update($, isAutoCompact, v => !v)}
         />
+        <Text> </Text>
+        <Button
+          key="panel"
+          label={isOpen ? 'hide insights' : 'show insights'}
+          dimColor
+          onPress={async () => {
+            await togglePanel($)
+          }}
+        />
       </Box>
     )
   })
 
-  on('command.run', { command: 'insights' }, async $ => {
-    const isOpen = await $.ui.open({ id: PANE, title: 'Session insights' }).then(
-      () => true,
-      () => false,
-    )
+  on('command.run', { command: COMMAND }, async $ => {
+    const done = await togglePanel($)
+    const text = {
+      shown: 'Session insights panel shown.',
+      hidden: 'Session insights panel hidden.',
+      failed: 'Could not change the insights panel.',
+    }[done]
 
-    return { text: isOpen ? 'Session insights pane opened.' : 'Could not open the insights pane.' }
-  }).catch(() => ({ text: 'Could not open the insights pane.' }))
+    return { text }
+  }).catch(() => ({ text: 'Could not change the insights panel.' }))
+
+  // The person can close the panel with its own mark; keep the band's button honest.
+  on('ui.close', async ($, e, next) => {
+    const closed = await next(e)
+    if (e.id === PANE) await safe(() => syncPanel($))
+
+    return closed
+  }).catch(($, e, next) => next(e))
 
   // The three hooks below sit on the model's and the person's path: they only watch, so
   // whatever the bookkeeping throws is swallowed and the event goes on unchanged.

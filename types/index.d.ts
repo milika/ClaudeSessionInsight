@@ -24,6 +24,8 @@ declare module 'claude-code' {
       isAutoCompact: boolean
       /** True while a compaction this mod started runs. */
       isCompacting: boolean
+      /** True while the insights panel is open and drawn. */
+      isPanelOpen: boolean
     }
   }
 }
