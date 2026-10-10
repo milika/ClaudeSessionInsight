@@ -1,7 +1,7 @@
 {
   "name": "session-insights",
-  "version": "0.1.0",
-  "description": "A weekly-limit band and insights pane, auto-compact at 75% context, and a title marker while background tasks run.",
+  "version": "0.2.0",
+  "description": "A weekly-limit band and insights panel, auto-compact at 75% context, and a title marker while background tasks run.",
   "author": {
     "name": "milika",
     "url": "https://github.com/milika"
