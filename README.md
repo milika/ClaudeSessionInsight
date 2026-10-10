@@ -22,15 +22,26 @@ and never block a prompt, a tool call or the exit.
 
 ## Install
 
-Needs Claude Code 2.1.275 or later. In a terminal Claude Code session, at the prompt:
+Needs Claude Code 2.1.275 or later. In a terminal Claude Code session, at the prompt,
+add the marketplace first and then install the mod from it:
 
 ```
-/plugin install session-insights --marketplace milika/ClaudeSessionInsight
+/plugin marketplace add milika/ClaudeSessionInsight
+/plugin install session-insights@claude-session-insight
 ```
 
-Answer `y` to add the marketplace, then pick a scope (user scope loads it in every
-session, including the desktop app's local sessions). The mod is active at once, with no
-restart.
+Or the same from a shell:
+
+```
+claude plugin marketplace add milika/ClaudeSessionInsight
+claude plugin install session-insights@claude-session-insight
+```
+
+User scope (the default) loads it in every session, including the desktop app's local
+sessions. The mod is active at once, with no restart.
+
+If you get `Couldn't find plugin "session-insights"`, the marketplace was not added yet:
+run the first line, then install again with the `@claude-session-insight` suffix.
 
 ## Run it from a folder instead
 
