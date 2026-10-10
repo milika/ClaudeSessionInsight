@@ -1,0 +1,6 @@
+{
+  "name": "session-insights",
+  "version": "0.1.0",
+  "description": "A live pane with tool-call counts, durations, recent calls and prompt count for this session.",
+  "types": "./types/index.d.ts"
+}

@@ -1,0 +1,29 @@
+export type Call = {
+  id: string
+  tool: string
+  startedAt: number
+  durationMs?: number
+  isDone: boolean
+}
+
+/** One tracked seven-day rate-limit window: [timestamp ms, percent used] samples. */
+export type Week = {
+  endsAt: number
+  samples: [number, number][]
+}
+
+declare module 'claude-code' {
+  interface PluginState {
+    'session-insights': {
+      calls: Call[]
+      prompts: number
+      weeks: Week[]
+      /** Context window fill, whole percent; null until the first response. */
+      contextPct: number | null
+      /** Whether the mod compacts on its own at the threshold. */
+      isAutoCompact: boolean
+      /** True while a compaction this mod started runs. */
+      isCompacting: boolean
+    }
+  }
+}
