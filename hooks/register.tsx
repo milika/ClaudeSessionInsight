@@ -46,6 +46,7 @@ const MAX_TASKS = 50
 const TASK_TTL_MS = 12 * 3_600_000
 /** Waits at least this long between auto-compact attempts, whatever the last one did. */
 const COMPACT_COOLDOWN_MS = 2 * 60_000
+const RETRY_COMPACT_MS = 20_000
 let lastCompactAt = 0
 
 /** Observer-side work must never break the session: runs `fn`, swallows what it throws. */
@@ -72,11 +73,24 @@ async function runCompact($: EngineInterface) {
     const result = await $.session.compact()
     if (!result.skip) await safe(() => update($, contextPct, () => null))
   } catch {
-    // The engine refuses while a turn runs; the next measure tries again after the cooldown.
+    // The engine refuses while a turn runs: not a real attempt, so no cooldown, and look
+    // again shortly instead of waiting for the next context change, which may be a whole
+    // turn away.
+    lastCompactAt = 0
+    void $.clock.after(RETRY_COMPACT_MS, () => safe(() => compactIfNeeded($)))
   } finally {
     isCompactBusy = false
     await safe(() => update($, isCompacting, () => false))
   }
+}
+
+/** Compacts when the context is at or past COMPACT_AT, the toggle is on and the cooldown has passed. */
+async function compactIfNeeded($: EngineInterface) {
+  const usage = await $.session.usage()
+  const pct = usage.context.percent ?? null
+  const isOn = await read($, isAutoCompact).catch(() => false)
+  const isCooled = Date.now() - lastCompactAt > COMPACT_COOLDOWN_MS
+  if (pct !== null && pct >= COMPACT_AT && isOn && isCooled) await runCompact($)
 }
 
 /** Whether the insights panel is open and drawn, from the engine's own record. */
