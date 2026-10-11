@@ -19,7 +19,7 @@ test('pane draws a summary and an empty by-tool list', async $ => {
   }
 })
 
-test('band draws its two buttons even with no limit reading yet', async $ => {
+test('band draws its three buttons even with no limit reading yet', async $ => {
   for (const surface of ['terminal', 'desktop'] as const) {
     const band = await $.ui.mount({
       plugin: 'session-insights',
@@ -29,7 +29,7 @@ test('band draws its two buttons even with no limit reading yet', async $ => {
       props: { hasSurvey: false },
     })
     const buttons = await band.findAll({ type: 'Button' })
-    expect(buttons.length).toBe(2) // auto-compact toggle, show/hide insights
+    expect(buttons.length).toBe(3) // continue-after-reset toggle, auto-compact toggle, show/hide insights
     await band.unmount()
   }
 })

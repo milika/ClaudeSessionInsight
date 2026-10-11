@@ -26,6 +26,7 @@ declare module 'claude-code' {
       fiveHour: { pct: number; resetsAt: number } | null
       /** True while a compaction this mod started runs. */
       isCompacting: boolean
+      resumeAt: number | null
       /** True while the insights panel is open and drawn. */
       isPanelOpen: boolean
     }

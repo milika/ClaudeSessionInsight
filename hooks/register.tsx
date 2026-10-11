@@ -29,6 +29,8 @@ const isAutoCompact = atom({ plugin: 'session-insights', key: 'isAutoCompact' } 
 const isCompacting = atom({ plugin: 'session-insights', key: 'isCompacting' } as const, false)
 const isPanelOpen = atom({ plugin: 'session-insights', key: 'isPanelOpen' } as const, false)
 const fiveHour = atom({ plugin: 'session-insights', key: 'fiveHour' } as const, null)
+/** When to send "continue": set by the band's toggle, cleared when it is sent. */
+const resumeAt = atom({ plugin: 'session-insights', key: 'resumeAt' } as const, null)
 
 /** Not `/insights`: that one is a built-in skill's name. */
 const COMMAND = 'insight-panel'
@@ -47,6 +49,10 @@ const TASK_TTL_MS = 12 * 3_600_000
 /** Waits at least this long between auto-compact attempts, whatever the last one did. */
 const COMPACT_COOLDOWN_MS = 2 * 60_000
 const RETRY_COMPACT_MS = 20_000
+/** The five-hour window's tokens are back a little after the reset; wait this long past it. */
+const RESUME_DELAY_MS = 6 * 60_000
+const RESUME_CHECK_MS = 30_000
+const RESUME_COMPACT_TRIES = 30
 let lastCompactAt = 0
 
 /** Observer-side work must never break the session: runs `fn`, swallows what it throws. */
@@ -64,20 +70,25 @@ let isCompactBusy = false
  * Compacts the conversation now, from the auto trigger. One at a
  * time, silently, and it never throws: the engine refuses a compaction while a turn runs.
  */
-async function runCompact($: EngineInterface) {
-  if (isCompactBusy) return
+async function runCompact($: EngineInterface, retry = true): Promise<'done' | 'skipped' | 'failed' | 'busy'> {
+  if (isCompactBusy) return 'busy'
   isCompactBusy = true
   lastCompactAt = Date.now()
   await safe(() => update($, isCompacting, () => true))
   try {
     const result = await $.session.compact()
-    if (!result.skip) await safe(() => update($, contextPct, () => null))
+    if (result.skip) return 'skipped'
+    await safe(() => update($, contextPct, () => null))
+
+    return 'done'
   } catch {
     // The engine refuses while a turn runs: not a real attempt, so no cooldown, and look
     // again shortly instead of waiting for the next context change, which may be a whole
     // turn away.
     lastCompactAt = 0
-    void $.clock.after(RETRY_COMPACT_MS, () => safe(() => compactIfNeeded($)))
+    if (retry) void $.clock.after(RETRY_COMPACT_MS, () => safe(() => compactIfNeeded($)))
+
+    return 'failed'
   } finally {
     isCompactBusy = false
     await safe(() => update($, isCompacting, () => false))
@@ -91,6 +102,38 @@ async function compactIfNeeded($: EngineInterface) {
   const isOn = await read($, isAutoCompact).catch(() => false)
   const isCooled = Date.now() - lastCompactAt > COMPACT_COOLDOWN_MS
   if (pct !== null && pct >= COMPACT_AT && isOn && isCooled) await runCompact($)
+}
+
+/** Turns the scheduled "continue" on, aimed past the five-hour reset, or off again. */
+async function toggleResume($: EngineInterface) {
+  if ((await read($, resumeAt)) !== null) {
+    await update($, resumeAt, () => null)
+
+    return
+  }
+  const five = await read($, fiveHour)
+  const base = five !== null && five.resetsAt > Date.now() ? five.resetsAt : Date.now()
+  await update($, resumeAt, () => base + RESUME_DELAY_MS)
+}
+
+/** Sends "continue" once the scheduled time has passed, compacting first if needed; switches the toggle off first. */
+async function resumeIfDue($: EngineInterface) {
+  const at = await read($, resumeAt)
+  if (at === null || Date.now() < at) return
+  await update($, resumeAt, () => null)
+  // Compact first when the context is at the threshold, so the turn that follows starts
+  // light. Tries for up to ten minutes (a turn or another compaction may be in the way),
+  // then sends "continue" regardless: a long context is better than a chat left idle.
+  await safe(async () => {
+    for (let i = 0; i < RESUME_COMPACT_TRIES; i += 1) {
+      const pct = (await $.session.usage()).context.percent ?? null
+      if (pct === null || pct < COMPACT_AT) return
+      const outcome = await runCompact($, false)
+      if (outcome === 'done' || outcome === 'skipped') return
+      await $.clock.sleep(RETRY_COMPACT_MS)
+    }
+  })
+  await $.prompt.submit({ text: 'continue', asUser: true })
 }
 
 /** Whether the insights panel is open and drawn, from the engine's own record. */
@@ -270,6 +313,7 @@ export const register: Register = on => {
     await safe(async () => {
       // keeps the five-hour line moving between responses; dropped on reload, rebuilt here
       void $.clock.every(PLAN_POLL_MS, () => safe(() => pollPlan($)))
+      void $.clock.every(RESUME_CHECK_MS, () => safe(() => resumeIfDue($)))
     })
     await safe(() => syncTitle($)) // drops a marker left behind by a previous load
     await safe(async () => {
@@ -338,6 +382,7 @@ export const register: Register = on => {
     const busy = await read($, isCompacting).catch(() => false)
     const isOpen = await read($, isPanelOpen).catch(() => false)
     const five = await read($, fiveHour).catch(() => null)
+    const resume = await read($, resumeAt).catch(() => null)
     const all = sanitizeWeeks(await read($, weeks).catch(() => []))
     const now = Date.now()
     const current = all.filter(w => w.endsAt > now).sort((a, b) => a.endsAt - b.endsAt)[0]
@@ -368,9 +413,9 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column">
-        {five !== null && (
+        {(
           <Box alignItems="center">
-            {Svg ? (
+            {five !== null && Svg ? (
               <Box marginRight={1}>
                 <Svg
                   source={lineSvg(fivePct, 180, 4)}
@@ -380,7 +425,7 @@ export const register: Register = on => {
                 />
               </Box>
             ) : (
-              fiveLine && (
+              five !== null && fiveLine && (
                 <Text>
                   <Text color="#3b82f6">{fiveLine.used}</Text>
                   <Text dimColor>
@@ -392,6 +437,15 @@ export const register: Register = on => {
               )
             )}
             <Text dimColor>{fiveLabel}</Text>
+            <Box flexGrow={1} />
+            <Button
+              key="resume"
+              label={resume !== null ? `continue at ${fmtWhen(resume)}: on` : 'continue after 5h reset: off'}
+              dimColor
+              onPress={async () => {
+                await safe(() => toggleResume($))
+              }}
+            />
           </Box>
         )}
       <Box alignItems="center">

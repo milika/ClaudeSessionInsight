@@ -14,6 +14,10 @@ you want to know about a session in sight.
   and tool-call counts, durations by tool, and the recent calls.
 - **Auto-compact at 30% context**, with an on/off toggle in the band. It waits at least
   two minutes between attempts.
+- **Continue after the five-hour reset**: a toggle above the insights button. Switched on, it
+  sends `continue` six minutes after the five-hour window resets, compacting first when the
+  context is at the auto-compact threshold, then switches itself off. For chats blocked by
+  the limit.
 - **Background-task marker**: `⏳` is put at the start of the session's title while
   background tasks (shell commands, agents) are running, and removed when none are. The
   count is reconciled against the engine's own in-flight list every time the agent stops.

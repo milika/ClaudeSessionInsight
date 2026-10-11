@@ -1,6 +1,6 @@
 {
   "name": "session-insights",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "A weekly-limit band and insights panel, auto-compact at 30% context, and a title marker while background tasks run.",
   "author": {
     "name": "milika",
