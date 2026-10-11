@@ -29,7 +29,7 @@ test('band draws its two buttons even with no limit reading yet', async $ => {
       props: { hasSurvey: false },
     })
     const buttons = await band.findAll({ type: 'Button' })
-    expect(buttons.length).toBe(2)
+    expect(buttons.length).toBe(2) // auto-compact toggle, show/hide insights
     await band.unmount()
   }
 })

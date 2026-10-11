@@ -20,7 +20,7 @@ import {
 } from './weekly'
 
 const PANE = 'session-insights'
-const COMPACT_AT = 50
+const COMPACT_AT = 30
 const calls = atom({ plugin: 'session-insights', key: 'calls' } as const, [])
 const prompts = atom({ plugin: 'session-insights', key: 'prompts' } as const, 0)
 const weeks = atom({ plugin: 'session-insights', key: 'weeks' } as const, [])
@@ -54,6 +54,39 @@ async function safe(fn: () => unknown): Promise<void> {
     await fn()
   } catch {
     // the mod only watches; a failed watch is not worth the session's turn
+  }
+}
+
+let isCompactBusy = false
+
+/**
+ * Compacts the conversation now, from the auto trigger or the band's [c] button. One at a
+ * time, every outcome reported by toast, and it never throws: the engine refuses a
+ * compaction while a turn runs, which a press during one reports instead of hiding.
+ */
+async function runCompact($: EngineInterface, why: string) {
+  if (isCompactBusy) {
+    await safe(() => $.ui.toast('Already compacting'))
+
+    return
+  }
+  isCompactBusy = true
+  lastCompactAt = Date.now()
+  await safe(() => update($, isCompacting, () => true))
+  await safe(() => $.ui.toast(`${why}: compacting`))
+  try {
+    const result = await $.session.compact()
+    if (result.skip) {
+      await safe(() => $.ui.toast(`Compaction skipped: ${result.skip}`))
+    } else {
+      await safe(() => update($, contextPct, () => null))
+      await safe(() => $.ui.toast('Compacted'))
+    }
+  } catch {
+    await safe(() => $.ui.toast('Could not compact now (a turn may be running); try again or /compact'))
+  } finally {
+    isCompactBusy = false
+    await safe(() => update($, isCompacting, () => false))
   }
 }
 
@@ -265,8 +298,6 @@ export const register: Register = on => {
     return next(e)
   })
 
-  let isBusy = false
-
   on('session.measure', async ($, e, next) => {
     if (e.changed.includes('rateLimits')) await safe(() => track($, e.rateLimits))
     await safe(() => pollPlan($))
@@ -277,21 +308,8 @@ export const register: Register = on => {
 
       const isOn = await read($, isAutoCompact).catch(() => false)
       const isCooled = Date.now() - lastCompactAt > COMPACT_COOLDOWN_MS
-      if (pct !== null && pct >= COMPACT_AT && !isBusy && isOn && isCooled) {
-        isBusy = true
-        lastCompactAt = Date.now()
-        await safe(() => update($, isCompacting, () => true))
-        await safe(() => $.ui.toast(`Context at ${pct}%, compacting`))
-        try {
-          const result = await $.session.compact()
-          if (result.skip) await safe(() => $.ui.toast(`Compaction skipped: ${result.skip}`))
-          else await safe(() => update($, contextPct, () => null))
-        } catch {
-          await safe(() => $.ui.toast(`Auto-compact failed at ${pct}%; run /compact`))
-        } finally {
-          isBusy = false
-          await safe(() => update($, isCompacting, () => false))
-        }
+      if (pct !== null && pct >= COMPACT_AT && isOn && isCooled) {
+        await runCompact($, `Context at ${pct}%`)
       }
     }
 

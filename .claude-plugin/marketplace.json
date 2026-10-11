@@ -6,7 +6,7 @@
     {
       "name": "session-insights",
       "source": "./",
-      "description": "A weekly-limit band and insights panel, auto-compact at 50% context, and a title marker while background tasks run."
+      "description": "A weekly-limit band and insights panel, auto-compact at 30% context, and a title marker while background tasks run."
     }
   ]
 }
