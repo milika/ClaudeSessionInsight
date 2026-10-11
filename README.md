@@ -12,7 +12,7 @@ you want to know about a session in sight.
   or `/insight-panel`): the weekly bar, a
   per-day chart of how much of the limit each day spent against an even share, prompt
   and tool-call counts, durations by tool, and the recent calls.
-- **Auto-compact at 75% context**, with an on/off toggle in the band. It waits at least
+- **Auto-compact at 50% context**, with an on/off toggle in the band. It waits at least
   two minutes between attempts.
 - **Background-task marker**: `⏳` is put at the start of the session's title while
   background tasks (shell commands, agents) are running, and removed when none are. The

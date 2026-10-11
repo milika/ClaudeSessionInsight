@@ -20,7 +20,7 @@ import {
 } from './weekly'
 
 const PANE = 'session-insights'
-const COMPACT_AT = 75
+const COMPACT_AT = 50
 const calls = atom({ plugin: 'session-insights', key: 'calls' } as const, [])
 const prompts = atom({ plugin: 'session-insights', key: 'prompts' } as const, 0)
 const weeks = atom({ plugin: 'session-insights', key: 'weeks' } as const, [])
