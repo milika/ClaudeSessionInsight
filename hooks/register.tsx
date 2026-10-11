@@ -60,30 +60,19 @@ async function safe(fn: () => unknown): Promise<void> {
 let isCompactBusy = false
 
 /**
- * Compacts the conversation now, from the auto trigger or the band's [c] button. One at a
- * time, every outcome reported by toast, and it never throws: the engine refuses a
- * compaction while a turn runs, which a press during one reports instead of hiding.
+ * Compacts the conversation now, from the auto trigger. One at a
+ * time, silently, and it never throws: the engine refuses a compaction while a turn runs.
  */
-async function runCompact($: EngineInterface, why: string) {
-  if (isCompactBusy) {
-    await safe(() => $.ui.toast('Already compacting'))
-
-    return
-  }
+async function runCompact($: EngineInterface) {
+  if (isCompactBusy) return
   isCompactBusy = true
   lastCompactAt = Date.now()
   await safe(() => update($, isCompacting, () => true))
-  await safe(() => $.ui.toast(`${why}: compacting`))
   try {
     const result = await $.session.compact()
-    if (result.skip) {
-      await safe(() => $.ui.toast(`Compaction skipped: ${result.skip}`))
-    } else {
-      await safe(() => update($, contextPct, () => null))
-      await safe(() => $.ui.toast('Compacted'))
-    }
+    if (!result.skip) await safe(() => update($, contextPct, () => null))
   } catch {
-    await safe(() => $.ui.toast('Could not compact now (a turn may be running); try again or /compact'))
+    // The engine refuses while a turn runs; the next measure tries again after the cooldown.
   } finally {
     isCompactBusy = false
     await safe(() => update($, isCompacting, () => false))
@@ -132,7 +121,6 @@ function pruneTasks(now: number) {
 let applied: boolean | undefined
 let failures = 0
 let pausedUntil = 0
-let isLogged = false
 let chain: Promise<unknown> = Promise.resolve()
 
 const MAX_FAILURES = 3
@@ -153,7 +141,7 @@ async function finishTask($: EngineInterface, text: string) {
  *
  * Calls run one at a time, so a start and a finish never interleave. A failure is retried
  * after RETRY_MS and on the next task event; after MAX_FAILURES in a row it pauses for
- * PAUSE_MS, logging once, so a broken title tool is never hammered.
+ * PAUSE_MS, so a broken title tool is never hammered.
  */
 function syncTitle($: EngineInterface): Promise<unknown> {
   chain = chain.then(() => applyTitle($)).catch(() => undefined)
@@ -179,18 +167,11 @@ async function applyTitle($: EngineInterface) {
     }
     applied = wanted
     failures = 0
-    isLogged = false
-  } catch (err) {
+  } catch {
     failures += 1
     if (failures >= MAX_FAILURES) {
       failures = 0
       pausedUntil = Date.now() + PAUSE_MS
-      if (!isLogged) {
-        isLogged = true
-        $.ui.log(
-          `session-insights: title marker paused for 5 minutes: ${err instanceof Error ? err.message : String(err)}`,
-        )
-      }
     }
     void $.clock.after(RETRY_MS, () => syncTitle($))
   }
@@ -198,8 +179,6 @@ async function applyTitle($: EngineInterface) {
 
 let planFailures = 0
 let planPausedUntil = 0
-let isPlanLogged = false
-let lastPlanError = ''
 const PLAN_POLL_MS = 60_000
 
 /**
@@ -225,17 +204,8 @@ async function pollPlan($: EngineInterface) {
       throw new Error(`no five-hour window in: ${JSON.stringify(plan.windows ?? null).slice(0, 160)}`)
     }
     await update($, fiveHour, () => ({ pct: w.percentUsed as number, resetsAt: at }))
-    if (!isPlanLogged) {
-      isPlanLogged = true
-      $.ui.log(`session-insights: five-hour window read, ${w.percentUsed}% used`)
-    }
     planFailures = 0
-  } catch (err) {
-    const why = err instanceof Error ? err.message : String(err)
-    if (why !== lastPlanError) {
-      lastPlanError = why
-      $.ui.log(`session-insights: five-hour read failed: ${why}`)
-    }
+  } catch {
     planFailures += 1
     if (planFailures >= 5) {
       planFailures = 0
@@ -309,7 +279,7 @@ export const register: Register = on => {
       const isOn = await read($, isAutoCompact).catch(() => false)
       const isCooled = Date.now() - lastCompactAt > COMPACT_COOLDOWN_MS
       if (pct !== null && pct >= COMPACT_AT && isOn && isCooled) {
-        await runCompact($, `Context at ${pct}%`)
+        await runCompact($)
       }
     }
 
