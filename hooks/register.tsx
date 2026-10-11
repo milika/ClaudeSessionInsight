@@ -362,7 +362,7 @@ export const register: Register = on => {
         ? ''
         : `5h ${Math.round(fivePct)}%${isFiveLive ? ` · resets ${fmtWhen(five.resetsAt)} (in ${fmtSpan(five.resetsAt - now)})` : ''}`
     const fiveLine =
-      five !== null && !Svg ? bar(fivePct, 0, 40) : undefined
+      five !== null && !Svg ? bar(fivePct, 0, 24) : undefined
 
     return (
       <Box flexDirection="column">
@@ -371,9 +371,9 @@ export const register: Register = on => {
             {Svg ? (
               <Box marginRight={1}>
                 <Svg
-                  source={lineSvg(fivePct, 360, 4)}
+                  source={lineSvg(fivePct, 180, 4)}
                   alt={`Five-hour limit ${Math.round(fivePct)}% used`}
-                  width={360}
+                  width={180}
                   height={4}
                 />
               </Box>
