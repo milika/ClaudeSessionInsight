@@ -22,6 +22,8 @@ declare module 'claude-code' {
       contextPct: number | null
       /** Whether the mod compacts on its own at the threshold. */
       isAutoCompact: boolean
+      /** The five-hour limit window: percent used and when it resets (ms); null until read. */
+      fiveHour: { pct: number; resetsAt: number } | null
       /** True while a compaction this mod started runs. */
       isCompacting: boolean
       /** True while the insights panel is open and drawn. */

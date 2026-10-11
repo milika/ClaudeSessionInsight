@@ -23,6 +23,20 @@ export function barSvg(pct: number, timeFrac: number, level: Level, width: numbe
   )
 }
 
+const BLUE = '#3b82f6'
+
+/** A thin blue line that fills left to right with `pct`, on a faint track. */
+export function lineSvg(pct: number, width: number, height: number) {
+  const fill = (clamp(Number.isFinite(pct) ? pct : 0, 0, 100) / 100) * width
+  const r = height / 2
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
+    `<rect width="${width}" height="${height}" rx="${r}" fill="${TRACK}"/>` +
+    (fill > 0 ? `<rect width="${Math.max(fill, height)}" height="${height}" rx="${r}" fill="${BLUE}"/>` : '') +
+    `</svg>`
+  )
+}
+
 export type DayBar = { label: string; spent: number; isFuture: boolean; isToday: boolean }
 
 /** Seven columns, one per day of the window, with a dashed line at the even share. */

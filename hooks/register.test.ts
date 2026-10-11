@@ -19,4 +19,19 @@ test('pane draws a summary and an empty by-tool list', async $ => {
   }
 })
 
+test('band draws its two buttons even with no limit reading yet', async $ => {
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const band = await $.ui.mount({
+      plugin: 'session-insights',
+      surface,
+      component: 'AbovePrompt',
+      requestId: 'band',
+      props: { hasSurvey: false },
+    })
+    const buttons = await band.findAll({ type: 'Button' })
+    expect(buttons.length).toBe(2)
+    await band.unmount()
+  }
+})
+
 void register

@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Call, Week } from '../types'
-import { barSvg, daysSvg } from './charts'
+import { barSvg, daysSvg, lineSvg } from './charts'
 import { reconcile } from './tasks'
 import {
   analyze,
@@ -28,6 +28,7 @@ const contextPct = atom({ plugin: 'session-insights', key: 'contextPct' } as con
 const isAutoCompact = atom({ plugin: 'session-insights', key: 'isAutoCompact' } as const, true)
 const isCompacting = atom({ plugin: 'session-insights', key: 'isCompacting' } as const, false)
 const isPanelOpen = atom({ plugin: 'session-insights', key: 'isPanelOpen' } as const, false)
+const fiveHour = atom({ plugin: 'session-insights', key: 'fiveHour' } as const, null)
 
 /** Not `/insights`: that one is a built-in skill's name. */
 const COMMAND = 'insight-panel'
@@ -162,8 +163,64 @@ async function applyTitle($: EngineInterface) {
   }
 }
 
+let planFailures = 0
+let planPausedUntil = 0
+let isPlanLogged = false
+let lastPlanError = ''
+const PLAN_POLL_MS = 60_000
+
+/**
+ * Reads the plan's five-hour window straight from the desktop app's usage card. The
+ * engine's per-response limit list does not always carry it, the card always does.
+ * Backs off after repeated failures; never throws.
+ */
+async function pollPlan($: EngineInterface) {
+  if (Date.now() < planPausedUntil) return
+  try {
+    const got = await $.mcp.call(SESSIONS, 'get_usage', {})
+    const block = got.content.find(c => c.type === 'text') as { text?: string } | undefined
+    if (got.isError) throw new Error(`get_usage error: ${String(block?.text).slice(0, 160)}`)
+    const plan = (
+      JSON.parse(block?.text ?? '{}') as {
+        plan?: { status?: string; windows?: { label?: string; percentUsed?: number; resetsAt?: string }[] }
+      }
+    ).plan
+    if (plan?.status !== 'ok') throw new Error(`plan status is ${String(plan?.status)}`)
+    const w = plan.windows?.find(x => /5.?hour/i.test(x.label ?? ''))
+    const at = w?.resetsAt ? Date.parse(w.resetsAt) : NaN
+    if (!w || typeof w.percentUsed !== 'number' || !Number.isFinite(w.percentUsed) || !Number.isFinite(at)) {
+      throw new Error(`no five-hour window in: ${JSON.stringify(plan.windows ?? null).slice(0, 160)}`)
+    }
+    await update($, fiveHour, () => ({ pct: w.percentUsed as number, resetsAt: at }))
+    if (!isPlanLogged) {
+      isPlanLogged = true
+      $.ui.log(`session-insights: five-hour window read, ${w.percentUsed}% used`)
+    }
+    planFailures = 0
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err)
+    if (why !== lastPlanError) {
+      lastPlanError = why
+      $.ui.log(`session-insights: five-hour read failed: ${why}`)
+    }
+    planFailures += 1
+    if (planFailures >= 5) {
+      planFailures = 0
+      planPausedUntil = Date.now() + 10 * 60_000
+    }
+  }
+}
+
 /** Records the seven-day window's percent and mirrors it into the panel's and band's state. */
 async function track($: EngineInterface, limits: Limit[]) {
+  await safe(async () => {
+    const five = limits.find(l => l.kind === 'five_hour')
+    const at = five?.resetsAt ? Date.parse(five.resetsAt) : NaN
+    if (five && Number.isFinite(five.percentUsed) && Number.isFinite(at)) {
+      await update($, fiveHour, () => ({ pct: five.percentUsed, resetsAt: at }))
+    }
+  })
+
   const limit = limits.find(l => l.kind === 'seven_day')
   if (!limit?.resetsAt || !Number.isFinite(limit.percentUsed)) return
   const endsAt = Date.parse(limit.resetsAt)
@@ -192,6 +249,11 @@ export const register: Register = on => {
     })
     // the panel is never opened unasked: the band's button or /insight-panel shows it
     await safe(() => syncPanel($))
+    await safe(() => pollPlan($))
+    await safe(async () => {
+      // keeps the five-hour line moving between responses; dropped on reload, rebuilt here
+      void $.clock.every(PLAN_POLL_MS, () => safe(() => pollPlan($)))
+    })
     await safe(() => syncTitle($)) // drops a marker left behind by a previous load
     await safe(async () => {
       // no reading yet is fine; session.measure fills it in after the first response
@@ -207,6 +269,7 @@ export const register: Register = on => {
 
   on('session.measure', async ($, e, next) => {
     if (e.changed.includes('rateLimits')) await safe(() => track($, e.rateLimits))
+    await safe(() => pollPlan($))
 
     if (e.changed.includes('context')) {
       const pct = e.context.percent ?? null
@@ -272,6 +335,7 @@ export const register: Register = on => {
     const auto = await read($, isAutoCompact).catch(() => true)
     const busy = await read($, isCompacting).catch(() => false)
     const isOpen = await read($, isPanelOpen).catch(() => false)
+    const five = await read($, fiveHour).catch(() => null)
     const all = sanitizeWeeks(await read($, weeks).catch(() => []))
     const now = Date.now()
     const current = all.filter(w => w.endsAt > now).sort((a, b) => a.endsAt - b.endsAt)[0]
@@ -289,7 +353,45 @@ export const register: Register = on => {
     const b = report ? bar(report.pct, elapsedFrac(report, now), 24) : undefined
     const level = report ? levelOf(report) : 'success'
 
+    // the five-hour window: a blue line that fills as it is used; a window that has
+    // already reset reads as empty until the next reading arrives
+    const isFiveLive = five !== null && five.resetsAt > now
+    const fivePct = five !== null && isFiveLive ? five.pct : 0
+    const fiveLabel =
+      five === null
+        ? ''
+        : `5h ${Math.round(fivePct)}%${isFiveLive ? ` · resets ${fmtWhen(five.resetsAt)} (in ${fmtSpan(five.resetsAt - now)})` : ''}`
+    const fiveLine =
+      five !== null && !Svg ? bar(fivePct, 0, 40) : undefined
+
     return (
+      <Box flexDirection="column">
+        {five !== null && (
+          <Box alignItems="center">
+            {Svg ? (
+              <Box marginRight={1}>
+                <Svg
+                  source={lineSvg(fivePct, 360, 4)}
+                  alt={`Five-hour limit ${Math.round(fivePct)}% used`}
+                  width={360}
+                  height={4}
+                />
+              </Box>
+            ) : (
+              fiveLine && (
+                <Text>
+                  <Text color="#3b82f6">{fiveLine.used}</Text>
+                  <Text dimColor>
+                    {fiveLine.before}
+                    {fiveLine.tick}
+                    {fiveLine.after}
+                  </Text>{' '}
+                </Text>
+              )
+            )}
+            <Text dimColor>{fiveLabel}</Text>
+          </Box>
+        )}
       <Box alignItems="center">
         {report && Svg && (
           <Box marginRight={1}>
@@ -330,6 +432,7 @@ export const register: Register = on => {
             await togglePanel($)
           }}
         />
+      </Box>
       </Box>
     )
   })
