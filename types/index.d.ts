@@ -27,6 +27,7 @@ declare module 'claude-code' {
       /** True while a compaction this mod started runs. */
       isCompacting: boolean
       resumeAt: number | null
+      resumeUnknown: boolean
       /** True while the insights panel is open and drawn. */
       isPanelOpen: boolean
     }

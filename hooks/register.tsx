@@ -31,6 +31,8 @@ const isPanelOpen = atom({ plugin: 'session-insights', key: 'isPanelOpen' } as c
 const fiveHour = atom({ plugin: 'session-insights', key: 'fiveHour' } as const, null)
 /** When to send "continue": set by the band's toggle, cleared when it is sent. */
 const resumeAt = atom({ plugin: 'session-insights', key: 'resumeAt' } as const, null)
+/** True after a press that found no live five-hour reset time to aim at. */
+const resumeUnknown = atom({ plugin: 'session-insights', key: 'resumeUnknown' } as const, false)
 
 /** Not `/insights`: that one is a built-in skill's name. */
 const COMMAND = 'insight-panel'
@@ -111,9 +113,17 @@ async function toggleResume($: EngineInterface) {
 
     return
   }
+  // read the reset time fresh, never off a stale reading: a wrong time would send early
+  planPausedUntil = 0
+  await pollPlan($)
   const five = await read($, fiveHour)
-  const base = five !== null && five.resetsAt > Date.now() ? five.resetsAt : Date.now()
-  await update($, resumeAt, () => base + RESUME_DELAY_MS)
+  if (five === null || five.resetsAt <= Date.now()) {
+    await update($, resumeUnknown, () => true)
+
+    return
+  }
+  await update($, resumeUnknown, () => false)
+  await update($, resumeAt, () => five.resetsAt + RESUME_DELAY_MS)
 }
 
 /** Sends "continue" once the scheduled time has passed, compacting first if needed; switches the toggle off first. */
@@ -383,6 +393,7 @@ export const register: Register = on => {
     const isOpen = await read($, isPanelOpen).catch(() => false)
     const five = await read($, fiveHour).catch(() => null)
     const resume = await read($, resumeAt).catch(() => null)
+    const resumeNoTime = await read($, resumeUnknown).catch(() => false)
     const all = sanitizeWeeks(await read($, weeks).catch(() => []))
     const now = Date.now()
     const current = all.filter(w => w.endsAt > now).sort((a, b) => a.endsAt - b.endsAt)[0]
@@ -440,7 +451,13 @@ export const register: Register = on => {
             <Box flexGrow={1} />
             <Button
               key="resume"
-              label={resume !== null ? `continue at ${fmtWhen(resume)}: on` : 'continue after 5h reset: off'}
+              label={
+                resume !== null
+                  ? `continue at ${fmtWhen(resume)}: on`
+                  : resumeNoTime
+                    ? 'continue after 5h reset: no reset time yet'
+                    : 'continue after 5h reset: off'
+              }
               dimColor
               onPress={async () => {
                 await safe(() => toggleResume($))
