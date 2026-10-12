@@ -28,6 +28,7 @@ declare module 'claude-code' {
       isCompacting: boolean
       resumeAt: number | null
       resumeUnknown: boolean
+      resumeLast: string | null
       /** True while the insights panel is open and drawn. */
       isPanelOpen: boolean
     }

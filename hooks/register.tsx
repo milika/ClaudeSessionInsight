@@ -32,6 +32,7 @@ const fiveHour = atom({ plugin: 'session-insights', key: 'fiveHour' } as const, 
 /** When to send "continue": set by the band's toggle, cleared when it is sent. */
 const resumeAt = atom({ plugin: 'session-insights', key: 'resumeAt' } as const, null)
 /** True after a press that found no live five-hour reset time to aim at. */
+const resumeLast = atom({ plugin: 'session-insights', key: 'resumeLast' } as const, null)
 const resumeUnknown = atom({ plugin: 'session-insights', key: 'resumeUnknown' } as const, false)
 
 /** Not `/insights`: that one is a built-in skill's name. */
@@ -123,27 +124,65 @@ async function toggleResume($: EngineInterface) {
     return
   }
   await update($, resumeUnknown, () => false)
+  ensureTicker($)
   await update($, resumeAt, () => five.resetsAt + RESUME_DELAY_MS)
+}
+
+let isResuming = false
+let lastTick = 0
+let lastPlanAt = 0
+
+/**
+ * Runs the periodic work: the scheduled "continue" and the five-hour poll. A reload drops
+ * the engine's timers without running session.start again, so this is called from the
+ * events that keep arriving and starts a fresh timer whenever the last one has gone quiet.
+ */
+function ensureTicker($: EngineInterface) {
+  if (Date.now() - lastTick < RESUME_CHECK_MS * 3) return
+  lastTick = Date.now()
+  void $.clock.every(RESUME_CHECK_MS, () =>
+    safe(async () => {
+      lastTick = Date.now()
+      await resumeIfDue($)
+      if (Date.now() - lastPlanAt >= PLAN_POLL_MS) await pollPlan($)
+    }),
+  )
 }
 
 /** Sends "continue" once the scheduled time has passed, compacting first if needed; switches the toggle off first. */
 async function resumeIfDue($: EngineInterface) {
+  if (isResuming) return
   const at = await read($, resumeAt)
   if (at === null || Date.now() < at) return
-  await update($, resumeAt, () => null)
-  // Compact first when the context is at the threshold, so the turn that follows starts
-  // light. Tries for up to ten minutes (a turn or another compaction may be in the way),
-  // then sends "continue" regardless: a long context is better than a chat left idle.
-  await safe(async () => {
-    for (let i = 0; i < RESUME_COMPACT_TRIES; i += 1) {
-      const pct = (await $.session.usage()).context.percent ?? null
-      if (pct === null || pct < COMPACT_AT) return
-      const outcome = await runCompact($, false)
-      if (outcome === 'done' || outcome === 'skipped') return
-      await $.clock.sleep(RETRY_COMPACT_MS)
-    }
-  })
-  await $.prompt.submit({ text: 'continue', asUser: true })
+  isResuming = true
+  try {
+    await update($, resumeAt, () => null)
+    // Compact first unless the context is known to be under the threshold, so the turn
+    // that follows starts light. Tries for up to ten minutes (a turn or another compaction
+    // may be in the way), then sends "continue" regardless: a long context is better
+    // than a chat left idle.
+    let note = 'sent'
+    await safe(async () => {
+      for (let i = 0; i < RESUME_COMPACT_TRIES; i += 1) {
+        const live = (await $.session.usage()).context.percent ?? null
+        const pct = live ?? (await read($, contextPct))
+        if (pct !== null && pct < COMPACT_AT) return
+        const outcome = await runCompact($, false)
+        if (outcome === 'done') {
+          note = 'compacted, sent'
+
+          return
+        }
+        if (outcome === 'skipped') return
+        note = 'could not compact, sent'
+        await $.clock.sleep(RETRY_COMPACT_MS)
+      }
+    })
+    await $.prompt.submit({ text: 'continue', asUser: true })
+    await safe(() => update($, resumeLast, () => `${fmtWhen(Date.now())} ${note}`))
+  } finally {
+    isResuming = false
+  }
 }
 
 /** Whether the insights panel is open and drawn, from the engine's own record. */
@@ -255,6 +294,7 @@ const PLAN_POLL_MS = 60_000
  */
 async function pollPlan($: EngineInterface) {
   if (Date.now() < planPausedUntil) return
+  lastPlanAt = Date.now()
   try {
     const got = await $.mcp.call(SESSIONS, 'get_usage', {})
     const block = got.content.find(c => c.type === 'text') as { text?: string } | undefined
@@ -322,8 +362,7 @@ export const register: Register = on => {
     await safe(() => pollPlan($))
     await safe(async () => {
       // keeps the five-hour line moving between responses; dropped on reload, rebuilt here
-      void $.clock.every(PLAN_POLL_MS, () => safe(() => pollPlan($)))
-      void $.clock.every(RESUME_CHECK_MS, () => safe(() => resumeIfDue($)))
+      ensureTicker($)
     })
     await safe(() => syncTitle($)) // drops a marker left behind by a previous load
     await safe(async () => {
@@ -337,6 +376,7 @@ export const register: Register = on => {
   })
 
   on('session.measure', async ($, e, next) => {
+    ensureTicker($)
     if (e.changed.includes('rateLimits')) await safe(() => track($, e.rateLimits))
     await safe(() => pollPlan($))
 
@@ -366,6 +406,7 @@ export const register: Register = on => {
   // The engine lists the work still in flight whenever the agent stops: the one source of
   // truth. Whatever the notifications and tool results guessed, this puts the count right.
   on('classic.Stop', async ($, e, next) => {
+    ensureTicker($)
     await safe(async () => {
       if (!Array.isArray(e.background_tasks)) return
       reconcile(running, e.background_tasks, Date.now())
@@ -386,6 +427,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    ensureTicker($)
     if (e.props.hasSurvey) return next(e)
 
     const auto = await read($, isAutoCompact).catch(() => true)
@@ -393,6 +435,7 @@ export const register: Register = on => {
     const isOpen = await read($, isPanelOpen).catch(() => false)
     const five = await read($, fiveHour).catch(() => null)
     const resume = await read($, resumeAt).catch(() => null)
+    const resumeDone = await read($, resumeLast).catch(() => null)
     const resumeNoTime = await read($, resumeUnknown).catch(() => false)
     const all = sanitizeWeeks(await read($, weeks).catch(() => []))
     const now = Date.now()
@@ -449,6 +492,7 @@ export const register: Register = on => {
             )}
             <Text dimColor>{fiveLabel}</Text>
             <Box flexGrow={1} />
+            {resumeDone !== null && resume === null && <Text dimColor>last continue {resumeDone}{'  '}</Text>}
             <Button
               key="resume"
               label={
