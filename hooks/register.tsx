@@ -32,6 +32,7 @@ const fiveHour = atom({ plugin: 'session-insights', key: 'fiveHour' } as const, 
 /** When to send "continue": set by the band's toggle, cleared when it is sent. */
 const resumeAt = atom({ plugin: 'session-insights', key: 'resumeAt' } as const, null)
 /** True after a press that found no live five-hour reset time to aim at. */
+const compactLast = atom({ plugin: 'session-insights', key: 'compactLast' } as const, null)
 const resumeLast = atom({ plugin: 'session-insights', key: 'resumeLast' } as const, null)
 const resumeUnknown = atom({ plugin: 'session-insights', key: 'resumeUnknown' } as const, false)
 
@@ -52,6 +53,7 @@ const TASK_TTL_MS = 12 * 3_600_000
 /** Waits at least this long between auto-compact attempts, whatever the last one did. */
 const COMPACT_COOLDOWN_MS = 2 * 60_000
 const RETRY_COMPACT_MS = 20_000
+const COMPACT_HANG_MS = 3 * 60_000
 /** The five-hour window's tokens are back a little after the reset; wait this long past it. */
 const RESUME_DELAY_MS = 6 * 60_000
 const RESUME_CHECK_MS = 30_000
@@ -77,18 +79,33 @@ async function runCompact($: EngineInterface, retry = true): Promise<'done' | 's
   if (isCompactBusy) return 'busy'
   isCompactBusy = true
   lastCompactAt = Date.now()
+  const note = (text: string) => safe(() => update($, compactLast, () => `${fmtWhen(Date.now())} ${text}`))
   await safe(() => update($, isCompacting, () => true))
   try {
-    const result = await $.session.compact()
-    if (result.skip) return 'skipped'
+    // a compaction that never answers must not hold the busy flag for good
+    const result = await Promise.race([
+      $.session.compact(),
+      $.clock.sleep(COMPACT_HANG_MS).then(() => 'hung' as const),
+    ])
+    if (result === 'hung') {
+      await note('no answer from the engine')
+
+      return 'failed'
+    }
+    if (result.skip) {
+      await note(`skipped (${String(result.skip).slice(0, 40)})`)
+
+      return 'skipped'
+    }
     await safe(() => update($, contextPct, () => null))
+    await note('compacted')
 
     return 'done'
-  } catch {
-    // The engine refuses while a turn runs: not a real attempt, so no cooldown, and look
-    // again shortly instead of waiting for the next context change, which may be a whole
-    // turn away.
+  } catch (err) {
+    // The engine refuses while a turn runs: not a real attempt, so no cooldown; the
+    // ticker looks again shortly.
     lastCompactAt = 0
+    await note(`refused (${(err instanceof Error ? err.message : String(err)).slice(0, 50)})`)
     if (retry) void $.clock.after(RETRY_COMPACT_MS, () => safe(() => compactIfNeeded($)))
 
     return 'failed'
@@ -144,6 +161,7 @@ function ensureTicker($: EngineInterface) {
     safe(async () => {
       lastTick = Date.now()
       await resumeIfDue($)
+      await compactIfNeeded($)
       if (Date.now() - lastPlanAt >= PLAN_POLL_MS) await pollPlan($)
     }),
   )
@@ -384,11 +402,9 @@ export const register: Register = on => {
       const pct = e.context.percent ?? null
       await safe(() => update($, contextPct, () => pct))
 
-      const isOn = await read($, isAutoCompact).catch(() => false)
-      const isCooled = Date.now() - lastCompactAt > COMPACT_COOLDOWN_MS
-      if (pct !== null && pct >= COMPACT_AT && isOn && isCooled) {
-        await runCompact($)
-      }
+      // not awaited: the hook is part of the turn's own path, and a compaction answered
+      // from inside it could hold the turn up. The ticker retries whatever is refused.
+      void safe(() => compactIfNeeded($))
     }
 
     return next(e)
@@ -407,6 +423,8 @@ export const register: Register = on => {
   // truth. Whatever the notifications and tool results guessed, this puts the count right.
   on('classic.Stop', async ($, e, next) => {
     ensureTicker($)
+    // the agent has stopped: the best moment to compact, so try without waiting for the tick
+    void safe(() => compactIfNeeded($))
     await safe(async () => {
       if (!Array.isArray(e.background_tasks)) return
       reconcile(running, e.background_tasks, Date.now())
@@ -436,6 +454,7 @@ export const register: Register = on => {
     const five = await read($, fiveHour).catch(() => null)
     const resume = await read($, resumeAt).catch(() => null)
     const resumeDone = await read($, resumeLast).catch(() => null)
+    const compactDone = await read($, compactLast).catch(() => null)
     const resumeNoTime = await read($, resumeUnknown).catch(() => false)
     const all = sanitizeWeeks(await read($, weeks).catch(() => []))
     const now = Date.now()
@@ -492,6 +511,7 @@ export const register: Register = on => {
             )}
             <Text dimColor>{fiveLabel}</Text>
             <Box flexGrow={1} />
+            {compactDone !== null && <Text dimColor>compact {compactDone}{'  '}</Text>}
             {resumeDone !== null && resume === null && <Text dimColor>last continue {resumeDone}{'  '}</Text>}
             <Button
               key="resume"
