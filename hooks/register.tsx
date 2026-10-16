@@ -102,10 +102,26 @@ async function runCompact($: EngineInterface, retry = true): Promise<'done' | 's
 
     return 'done'
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    // Some hosts (the desktop app) do not offer the direct call: type /compact instead.
+    if (/not available/i.test(message)) {
+      try {
+        await $.prompt.submit({ text: '/compact', asUser: true })
+        await safe(() => update($, contextPct, () => null))
+        await note('compact sent as /compact')
+
+        return 'done'
+      } catch (err2) {
+        await note(`refused (${(err2 instanceof Error ? err2.message : String(err2)).slice(0, 50)})`)
+        lastCompactAt = 0
+
+        return 'failed'
+      }
+    }
     // The engine refuses while a turn runs: not a real attempt, so no cooldown; the
     // ticker looks again shortly.
     lastCompactAt = 0
-    await note(`refused (${(err instanceof Error ? err.message : String(err)).slice(0, 50)})`)
+    await note(`refused (${message.slice(0, 50)})`)
     if (retry) void $.clock.after(RETRY_COMPACT_MS, () => safe(() => compactIfNeeded($)))
 
     return 'failed'
