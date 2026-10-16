@@ -103,12 +103,12 @@ async function runCompact($: EngineInterface, retry = true): Promise<'done' | 's
     return 'done'
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    // Some hosts (the desktop app) do not offer the direct call: type /compact instead.
+    // Some hosts (the desktop app) do not offer the direct call: run the /compact command instead.
     if (/not available/i.test(message)) {
       try {
-        await $.prompt.submit({ text: '/compact', asUser: true })
+        await $.command.run({ command: 'compact' })
         await safe(() => update($, contextPct, () => null))
-        await note('compact sent as /compact')
+        await note('compact run as /compact')
 
         return 'done'
       } catch (err2) {
